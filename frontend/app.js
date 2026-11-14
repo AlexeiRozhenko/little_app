@@ -395,7 +395,7 @@ const ProfilePage = {
     <div class="card">
       <label>Display name</label>
       <div class="row"><input v-model="name" maxlength="40"><button class="btn" @click="save">Save</button></div>
-      <p class="muted small">{{ me.user.email }} <span v-if="msg">· {{ msg }}</span></p>
+      <p class="muted small">@{{ me.user.username }} <span v-if="msg">· {{ msg }}</span></p>
       <p v-if="err" class="error">{{ err }}</p>
     </div>
     <div class="card">
@@ -412,27 +412,18 @@ const ProfilePage = {
 
 const AuthScreen = {
   setup() {
-    const mode = ref('login'), email = ref(''), password = ref(''), name = ref('');
-    const err = ref(''), msg = ref(''), busy = ref(false);
+    const mode = ref('login'), username = ref(''), password = ref('');
+    const err = ref(''), busy = ref(false);
     const submit = async () => {
-      err.value = ''; msg.value = ''; busy.value = true;
+      err.value = ''; busy.value = true;
       try {
-        if (mode.value === 'login') {
-          const { error } = await sb.auth.signInWithPassword({ email: email.value, password: password.value });
-          if (error) throw error;
-        } else if (mode.value === 'register') {
-          const { data, error } = await sb.auth.signUp({ email: email.value, password: password.value,
-            options: { data: { display_name: name.value } } });
-          if (error) throw error;
-          if (!data.session) msg.value = 'Check your inbox to confirm your email, then log in.';
-        } else {
-          const { error } = await sb.auth.resetPasswordForEmail(email.value, { redirectTo: location.origin });
-          if (error) throw error;
-          msg.value = 'If this email exists, a reset link is on its way.';
-        }
+        const action = mode.value === 'login' ? '/auth/login' : '/auth/register';
+        const tokens = await api(action, { method: 'POST', body: { username: username.value, password: password.value } });
+        const { error } = await sb.auth.setSession(tokens);
+        if (error) throw error;
       } catch (e) { err.value = e.message; } finally { busy.value = false; }
     };
-    return { mode, email, password, name, err, msg, busy, submit };
+    return { mode, username, password, err, busy, submit };
   },
   template: `
   <div class="auth">
@@ -443,15 +434,13 @@ const AuthScreen = {
         <button type="button" :class="{ on: mode === 'login' }" @click="mode = 'login'">Log in</button>
         <button type="button" :class="{ on: mode === 'register' }" @click="mode = 'register'">Sign up</button>
       </div>
-      <input v-if="mode === 'register'" v-model="name" placeholder="Your name" required maxlength="40">
-      <input v-model="email" type="email" placeholder="Email" required autocomplete="email">
-      <input v-if="mode !== 'forgot'" v-model="password" type="password" placeholder="Password (6+ characters)" required minlength="6"
+      <input v-model.trim="username" placeholder="Username" required minlength="3" maxlength="24"
+        pattern="[A-Za-z0-9_]{3,24}" autocomplete="username">
+      <input v-model="password" type="password" placeholder="Password (8+ characters)" required minlength="8"
         :autocomplete="mode === 'login' ? 'current-password' : 'new-password'">
-      <button class="btn primary wide" :disabled="busy">{{ mode === 'login' ? 'Log in' : mode === 'register' ? 'Create account' : 'Send reset link' }}</button>
-      <button v-if="mode === 'login'" type="button" class="link" @click="mode = 'forgot'">Forgot password?</button>
-      <button v-if="mode === 'forgot'" type="button" class="link" @click="mode = 'login'">← Back to log in</button>
+      <button class="btn primary wide" :disabled="busy">{{ mode === 'login' ? 'Log in' : 'Create account' }}</button>
+      <p v-if="mode === 'register'" class="muted small">Use 3–24 letters, digits or underscores. There is no email recovery, so keep your password safe.</p>
       <p v-if="err" class="error">{{ err }}</p>
-      <p v-if="msg" class="ok">{{ msg }}</p>
     </form>
   </div>`,
 };

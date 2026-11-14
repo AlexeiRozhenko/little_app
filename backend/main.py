@@ -5,6 +5,7 @@ with the user's access token; we verify it, then read/write the database
 with the service-role key while enforcing membership and reveal rules.
 """
 import os
+import re
 import secrets
 import uuid
 from datetime import date, datetime, timedelta, timezone
@@ -290,6 +291,60 @@ def config():
     return {"supabase_url": SUPABASE_URL, "supabase_anon_key": SUPABASE_ANON_KEY}
 
 
+# Usernames are mapped to internal, non-deliverable Supabase Auth email identifiers.
+# Password hashes, access tokens and refresh tokens remain managed by Supabase Auth.
+USERNAME_RE = re.compile(r"^[a-zA-Z0-9_]{3,24}$")
+
+
+class UsernameCredentials(BaseModel):
+    username: str
+    password: str
+
+
+def internal_email(username: str) -> str:
+    normalized = username.strip().lower()
+    if not USERNAME_RE.fullmatch(normalized):
+        raise HTTPException(400, "Username must be 3–24 characters: letters, numbers or underscore.")
+    return normalized + "@users.example.com"
+
+
+def user_session(email: str, password: str) -> dict:
+    # A separate anon client avoids mutating the privileged service-role client session.
+    try:
+        client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+        result = client.auth.sign_in_with_password({"email": email, "password": password})
+        if not result.session:
+            raise HTTPException(401, "Incorrect username or password.")
+        return {"access_token": result.session.access_token,
+                "refresh_token": result.session.refresh_token}
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(401, "Incorrect username or password.")
+
+
+@app.post("/api/auth/register")
+def register_account(body: UsernameCredentials):
+    email = internal_email(body.username)
+    if len(body.password) < 8 or len(body.password) > 128:
+        raise HTTPException(400, "Password must be between 8 and 128 characters.")
+    username = body.username.strip().lower()
+    try:
+        # No actual email confirmation is sent: this identifier is internal only.
+        sb.auth.admin.create_user({"email": email, "password": body.password,
+                                   "email_confirm": True,
+                                   "user_metadata": {"display_name": username}})
+    except Exception:
+        # Do not return raw provider errors or leak privileged backend internals.
+        raise HTTPException(409, "Username unavailable or registration failed.")
+    return user_session(email, body.password)
+
+
+@app.post("/api/auth/login")
+def login_account(body: UsernameCredentials):
+    return user_session(internal_email(body.username), body.password)
+
+
 @app.get("/api/me")
 def me(user=Depends(current_user)):
     profile = ensure_profile(user)
@@ -312,7 +367,7 @@ def me(user=Depends(current_user)):
                          "is_me": m["user_id"] == user.id} for m in members],
             "invite_token": invite,
         }
-    return {"user": {"id": user.id, "email": user.email, "display_name": profile["display_name"]},
+    return {"user": {"id": user.id, "username": (user.email or "").split("@")[0], "display_name": profile["display_name"]},
             "room": room_out}
 
 
